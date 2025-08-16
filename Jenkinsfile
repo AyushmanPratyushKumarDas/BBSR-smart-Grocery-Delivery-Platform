@@ -46,32 +46,23 @@ pipeline {
 
         stage('Deploy Application') {
             steps {
-                // This block securely loads the credential by its ID.
-                // Make sure to replace 'your-credential-id-here' with the actual ID you created.
                 withCredentials([string(credentialsId: 'bbsr-grocery-env', variable: 'ENV_FILE_CONTENT')]) {
                     script {
-                        try {
-                            // Create the .env file in the workspace just before it's needed
-                            echo 'Creating temporary .env file from Jenkins credentials...'
-                            sh 'echo "$ENV_FILE_CONTENT" > backend/.env'
+                        // Create the .env file. We will NOT delete it here anymore.
+                        echo 'Creating temporary .env file from Jenkins credentials...'
+                        sh 'echo "$ENV_FILE_CONTENT" > backend/.env'
 
-                            // Attempt to deploy all services
+                        try {
                             echo 'Attempting to deploy all services...'
                             sh 'docker compose up -d'
                             echo "SUCCESS: Both backend and frontend services are starting up."
-
                         } catch (any) {
-                            // If deployment fails, run the fallback
                             echo "WARN: Could not start all services. This is likely due to a backend failure."
                             echo "Attempting to start only the frontend service as a fallback."
                             sh 'docker compose up -d frontend'
                             echo "SUCCESS: Frontend service started independently."
-
-                        } finally {
-                            // IMPORTANT: Always clean up the temporary .env file for security
-                            echo 'Cleaning up temporary .env file...'
-                            sh 'rm backend/.env'
                         }
+                        // NOTE: The 'finally' block with 'rm' is removed from this stage.
                     }
                 }
             }
@@ -81,19 +72,25 @@ pipeline {
             steps {
                 script {
                     echo 'Waiting for services to become available...'
-                    sleep 30 // Give containers time to initialize
+                    sleep 30
 
                     try {
                         echo 'Checking Backend Health...'
                         sh 'curl -f http://localhost:5000/'
                         echo 'Backend is healthy.'
                     } catch (any) {
-                        echo 'Backend is not responding. This is expected if it failed to start.'
+                        echo 'Backend is not responding. This is likely due to a crash.'
                     }
 
-                    echo 'Checking Frontend Health...'
-                    sh 'curl -f http://localhost:80/ || error("Frontend failed health check.")'
-                    echo 'Frontend is healthy.'
+                    // FIX #1: Correct syntax for the frontend health check
+                    try {
+                        echo 'Checking Frontend Health...'
+                        sh 'curl -f http://localhost:80/'
+                        echo 'Frontend is healthy.'
+                    } catch (any) {
+                        // This will now correctly fail the pipeline if the frontend is down.
+                        error("Frontend failed health check.")
+                    }
                 }
             }
         }
@@ -102,14 +99,20 @@ pipeline {
     post {
         always {
             echo 'Pipeline completed. Final container status:'
+            // These commands will now work because the .env file still exists.
             sh 'docker compose ps'
             sh "docker images | grep '${DOCKER_IMAGE_BACKEND}\\|${DOCKER_IMAGE_FRONTEND}'"
+            
+            // FIX #2: Clean up the .env file at the very end of the pipeline.
+            echo 'Cleaning up temporary .env file...'
+            sh 'rm backend/.env || true'
         }
         success {
             echo 'Pipeline finished successfully!'
         }
         failure {
             echo 'Pipeline failed! Check the logs from the containers:'
+            // This command will now work correctly.
             sh 'docker compose logs --tail=100'
         }
     }
