@@ -39,7 +39,6 @@ pipeline {
             steps {
                 script {
                     echo 'Stopping existing containers...'
-                    // Using modern 'docker compose' command
                     sh 'docker compose down --remove-orphans || true'
                 }
             }
@@ -47,19 +46,32 @@ pipeline {
 
         stage('Deploy Application') {
             steps {
-                script {
-                    echo 'Attempting to deploy all services...'
-                    try {
-                        // TRY THIS FIRST: Start all services together.
-                        sh 'docker compose up -d'
-                        echo "SUCCESS: Both backend and frontend services are starting up."
+                // This block securely loads the credential by its ID.
+                // Make sure to replace 'your-credential-id-here' with the actual ID you created.
+                withCredentials([string(credentialsId: 'bbsr-grocery-env', variable: 'ENV_FILE_CONTENT')]) {
+                    script {
+                        try {
+                            // Create the .env file in the workspace just before it's needed
+                            echo 'Creating temporary .env file from Jenkins credentials...'
+                            sh 'echo "$ENV_FILE_CONTENT" > backend/.env'
 
-                    } catch (any) {
-                        // IF THE ABOVE FAILS, DO THIS INSTEAD:
-                        echo "WARN: Could not start all services. This is likely due to a backend failure."
-                        echo "Attempting to start only the frontend service as a fallback."
-                        sh 'docker compose up -d frontend'
-                        echo "SUCCESS: Frontend service started independently."
+                            // Attempt to deploy all services
+                            echo 'Attempting to deploy all services...'
+                            sh 'docker compose up -d'
+                            echo "SUCCESS: Both backend and frontend services are starting up."
+
+                        } catch (any) {
+                            // If deployment fails, run the fallback
+                            echo "WARN: Could not start all services. This is likely due to a backend failure."
+                            echo "Attempting to start only the frontend service as a fallback."
+                            sh 'docker compose up -d frontend'
+                            echo "SUCCESS: Frontend service started independently."
+
+                        } finally {
+                            // IMPORTANT: Always clean up the temporary .env file for security
+                            echo 'Cleaning up temporary .env file...'
+                            sh 'rm backend/.env'
+                        }
                     }
                 }
             }
