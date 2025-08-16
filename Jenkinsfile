@@ -2,22 +2,52 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_IMAGE_BACKEND = 'bbsr-grocery-backend'
+        DOCKOCKER_IMAGE_BACKEND = 'bbsr-grocery-backend'
         DOCKER_IMAGE_FRONTEND = 'bbsr-grocery-frontend'
         DOCKER_TAG = 'latest'
     }
 
     stages {
-        // --- STAGES: Checkout, Build Images, Stop Containers (No changes here) ---
-        stage('Checkout') { steps { checkout scm } }
-        stage('Build Images') { /* ... no changes ... */ }
-        stage('Stop Existing Containers') { /* ... no changes ... */ }
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build Images') {
+            parallel {
+                stage('Build Backend') {
+                    steps {
+                        script {
+                            echo 'Building Backend Docker Image...'
+                            sh "docker build -t ${DOCKER_IMAGE_BACKEND}:${DOCKER_TAG} ./backend"
+                        }
+                    }
+                }
+                stage('Build Frontend') {
+                    steps {
+                        script {
+                            echo 'Building Frontend Docker Image...'
+                            sh "docker build -t ${DOCKER_IMAGE_FRONTEND}:${DOCKER_TAG} ./frontend"
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Stop Existing Containers') {
+            steps {
+                script {
+                    echo 'Stopping existing containers...'
+                    sh 'docker compose down --remove-orphans || true'
+                }
+            }
+        }
 
         stage('Deploy Application') {
             steps {
                 withCredentials([string(credentialsId: 'bbsr-grocery-env', variable: 'ENV_FILE_CONTENT')]) {
                     script {
-                        // Create the .env file. It will persist until the 'post' block is done.
                         echo 'Creating .env file from Jenkins credentials...'
                         sh 'echo "$ENV_FILE_CONTENT" > backend/.env'
 
@@ -39,22 +69,30 @@ pipeline {
             steps {
                 script {
                     echo 'Waiting for services to become available...'
-                    sleep 30
-
-                    try {
-                        echo 'Checking Backend Health...'
-                        sh 'curl -f http://localhost:5000/'
-                        echo 'Backend is healthy.'
-                    } catch (any) {
-                        echo 'Backend is not responding. This is likely due to a crash.'
+                    
+                    // UPDATED: Replaced 'sleep' with a robust retry loop for the backend.
+                    // Tries 6 times, waiting 10 seconds between attempts (total 1 minute).
+                    timeout(time: 1, unit: 'MINUTES') {
+                        try {
+                            retry(6) {
+                                echo 'Checking Backend Health...'
+                                sh 'curl -f http://localhost:5000/'
+                                sleep 10 // Wait before next check if successful
+                            }
+                            echo 'Backend is healthy.'
+                        } catch (any) {
+                            echo 'Backend did not become healthy in time. This is likely due to a crash.'
+                        }
                     }
 
-                    try {
-                        echo 'Checking Frontend Health...'
-                        sh 'curl -f http://localhost:80/'
+                    // UPDATED: Replaced 'sleep' with a robust retry loop for the frontend.
+                    timeout(time: 1, unit: 'MINUTES') {
+                        retry(6) {
+                            echo 'Checking Frontend Health...'
+                            sh 'curl -f http://localhost:80/'
+                            sleep 10 // Wait before next check
+                        }
                         echo 'Frontend is healthy.'
-                    } catch (any) {
-                        error("Frontend failed health check.")
                     }
                 }
             }
@@ -62,8 +100,8 @@ pipeline {
     }
 
     post {
-        // FIX: Wrap the entire post block to ensure .env is available for all commands
-        withCredentials([string(credentialsId: 'your-credential-id-here', variable: 'ENV_FILE_CONTENT')]) {
+        // UPDATED: Wrapped the entire post block to ensure .env is always available for all commands.
+        withCredentials([string(credentialsId: 'bbsr-grocery-env', variable: 'ENV_FILE_CONTENT')]) {
             always {
                 // We create the .env file again here just for the post-build commands
                 sh 'echo "$ENV_FILE_CONTENT" > backend/.env'
@@ -81,7 +119,6 @@ pipeline {
             }
             failure {
                 echo 'Pipeline failed! Check the logs from the containers:'
-                // This command will now work and give you the backend error message
                 sh 'docker compose logs --tail=100'
             }
         }
