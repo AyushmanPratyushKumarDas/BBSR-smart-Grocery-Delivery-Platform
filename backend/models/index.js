@@ -1,7 +1,7 @@
-const User = require('./User');
-const Store = require('./Store');
-const Product = require('./Product');
-const Order = require('./Order');
+const User = require('./User.model');
+const Store = require('./Store.model');
+const Product = require('./Product.model');
+const Order = require('./Order.model');
 
 // User associations
 User.hasMany(Store, { foreignKey: 'ownerId', as: 'stores' });
