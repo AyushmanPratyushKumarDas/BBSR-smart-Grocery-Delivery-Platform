@@ -13,16 +13,6 @@ const http = require('http');
 // Load environment variables
 dotenv.config();
 
-// Import routes
-const authRoutes = require('./routes/auth');
-const userRoutes = require('./routes/users');
-const productRoutes = require('./routes/products');
-const storeRoutes = require('./routes/stores');
-const orderRoutes = require('./routes/orders');
-const deliveryRoutes = require('./routes/delivery');
-const paymentRoutes = require('./routes/payments');
-const analyticsRoutes = require('./routes/analytics');
-
 // Import middleware
 const { errorHandler } = require('./middleware/errorHandler.middleware');
 const { authenticateToken } = require('./middleware/auth.middleware');
@@ -41,6 +31,7 @@ const io = socketIo(server, {
 // Initialize services
 let awsStatus = false;
 let databaseStatus = false;
+let routesInitialized = false;
 
 // Connect to database and AWS services
 const initializeServices = async () => {
@@ -53,9 +44,39 @@ const initializeServices = async () => {
     // Initialize AWS services
     awsStatus = await initializeAWS();
     
+    // Import models after database connection is established
+    console.log('📦 Loading database models...');
+    const initializeModels = require('./models');
+    const { sequelize } = require('./config/database');
+    const { User, Store, Product, Order } = initializeModels(sequelize);
+    
+    // Import routes after models are available
+    console.log('🛣️ Loading API routes...');
+    const authRoutes = require('./routes/auth');
+    const userRoutes = require('./routes/users');
+    const productRoutes = require('./routes/products');
+    const storeRoutes = require('./routes/stores');
+    const orderRoutes = require('./routes/orders');
+    const deliveryRoutes = require('./routes/delivery');
+    const paymentRoutes = require('./routes/payments');
+    const analyticsRoutes = require('./routes/analytics');
+    
+    // Setup API Routes
+    app.use('/api/auth', authRoutes);
+    app.use('/api/users', authenticateToken, userRoutes);
+    app.use('/api/products', productRoutes);
+    app.use('/api/stores', storeRoutes);
+    app.use('/api/orders', authenticateToken, orderRoutes);
+    app.use('/api/delivery', authenticateToken, deliveryRoutes);
+    app.use('/api/payments', authenticateToken, paymentRoutes);
+    app.use('/api/analytics', authenticateToken, analyticsRoutes);
+    
+    routesInitialized = true;
+    
     console.log('✅ Services initialized successfully');
     console.log(`📊 Database Status: ${databaseStatus ? 'Connected' : 'Fallback Mode'}`);
     console.log(`☁️ AWS Status: ${awsStatus ? 'Connected' : 'Fallback Mode'}`);
+    console.log('🛣️ API Routes: Loaded and configured');
     
   } catch (error) {
     console.error('❌ Service initialization failed:', error.message);
@@ -108,6 +129,10 @@ app.get('/health', async (req, res) => {
           connected: awsStatus,
           rds: rdsStatus,
           s3: s3Status
+        },
+        routes: {
+          initialized: routesInitialized,
+          status: routesInitialized ? 'Ready' : 'Initializing'
         }
       },
       uptime: process.uptime(),
@@ -116,7 +141,7 @@ app.get('/health', async (req, res) => {
     };
     
     // Determine overall health status
-    const isHealthy = dbHealth.status === 'healthy';
+    const isHealthy = dbHealth.status === 'healthy' && routesInitialized;
     const statusCode = isHealthy ? 200 : 503;
     
     res.status(statusCode).json(healthStatus);
@@ -125,6 +150,7 @@ app.get('/health', async (req, res) => {
     console.log(`🏥 Health Check - Status: ${isHealthy ? '✅ Healthy' : '❌ Unhealthy'}`);
     console.log(`   Database: ${dbHealth.status}`);
     console.log(`   AWS: ${awsStatus ? 'Connected' : 'Not Connected'}`);
+    console.log(`   Routes: ${routesInitialized ? 'Ready' : 'Initializing'}`);
     
   } catch (error) {
     console.error('❌ Health check failed:', error.message);
@@ -148,6 +174,10 @@ app.get('/api/status', async (req, res) => {
         rds: awsStatus ? await checkRDSConnection() : null,
         s3: awsStatus ? await checkS3Access() : null
       },
+      routes: {
+        initialized: routesInitialized,
+        status: routesInitialized ? 'Ready' : 'Initializing'
+      },
       environment: process.env.NODE_ENV || 'development'
     };
     
@@ -161,6 +191,7 @@ app.get('/api/status', async (req, res) => {
     console.log(`   Database: ${status.database.dialect} at ${status.database.host}:${status.database.port}`);
     console.log(`   AWS RDS: ${status.aws.rds ? 'Connected' : 'Not Available'}`);
     console.log(`   AWS S3: ${status.aws.s3 ? 'Accessible' : 'Not Accessible'}`);
+    console.log(`   Routes: ${status.routes.status}`);
     
   } catch (error) {
     console.error('❌ Status check failed:', error.message);
@@ -172,15 +203,17 @@ app.get('/api/status', async (req, res) => {
   }
 });
 
-// API Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/users', authenticateToken, userRoutes);
-app.use('/api/products', productRoutes);
-app.use('/api/stores', storeRoutes);
-app.use('/api/orders', authenticateToken, orderRoutes);
-app.use('/api/delivery', authenticateToken, deliveryRoutes);
-app.use('/api/payments', authenticateToken, paymentRoutes);
-app.use('/api/analytics', authenticateToken, analyticsRoutes);
+// Middleware to check if routes are initialized
+app.use('/api/*', (req, res, next) => {
+  if (!routesInitialized) {
+    return res.status(503).json({
+      success: false,
+      message: 'API routes are still initializing. Please try again in a moment.',
+      timestamp: new Date().toISOString()
+    });
+  }
+  next();
+});
 
 // Socket.io connection handling
 io.on('connection', (socket) => {
@@ -237,6 +270,7 @@ const startServer = async () => {
       console.log('\n📋 Final Service Status:');
       console.log(`   Database: ${databaseStatus ? '✅ Connected' : '⚠️ Fallback Mode'}`);
       console.log(`   AWS Services: ${awsStatus ? '✅ Connected' : '⚠️ Fallback Mode'}`);
+      console.log(`   API Routes: ${routesInitialized ? '✅ Ready' : '⚠️ Initializing'}`);
       console.log(`   Socket.IO: ✅ Active`);
       console.log(`   Rate Limiting: ✅ Active`);
       console.log(`   Security: ✅ Active`);

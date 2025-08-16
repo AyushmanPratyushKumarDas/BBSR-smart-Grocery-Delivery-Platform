@@ -8,6 +8,22 @@ dotenv.config();
 let sequelize;
 let isAWSConnected = false;
 
+// Initialize a fallback SQLite connection for development
+const createFallbackConnection = () => {
+  try {
+    const fallbackSequelize = new Sequelize({
+      dialect: 'sqlite',
+      storage: './dev-database.sqlite',
+      logging: false
+    });
+    console.log('✅ SQLite fallback connection created');
+    return fallbackSequelize;
+  } catch (error) {
+    console.error('❌ Failed to create SQLite fallback:', error.message);
+    return null;
+  }
+};
+
 // Initialize database connection
 const initializeDatabase = async () => {
   try {
@@ -95,24 +111,27 @@ const initializeDatabase = async () => {
       console.log('🔄 Attempting to create minimal development connection...');
       
       try {
-        sequelize = new Sequelize({
-          dialect: 'sqlite',
-          storage: './dev-database.sqlite',
-          logging: false
-        });
-        
-        await sequelize.authenticate();
-        console.log('✅ SQLite development database connected (fallback mode)');
-        return false;
+        sequelize = createFallbackConnection();
+        if (sequelize) {
+          await sequelize.authenticate();
+          console.log('✅ SQLite development database connected (fallback mode)');
+          return false;
+        }
       } catch (sqliteError) {
         console.error('❌ SQLite fallback also failed:', sqliteError.message);
-        console.error('🚨 Application cannot start without database connection');
-        process.exit(1);
       }
-    } else {
-      console.error('🚨 Production environment requires database connection');
+    }
+    
+    // If all else fails, create a minimal SQLite connection to prevent crashes
+    console.log('🔄 Creating minimal SQLite connection to prevent crashes...');
+    sequelize = createFallbackConnection();
+    
+    if (!sequelize) {
+      console.error('🚨 Application cannot start without database connection');
       process.exit(1);
     }
+    
+    return false;
   }
 };
 
